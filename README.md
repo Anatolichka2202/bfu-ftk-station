@@ -155,3 +155,32 @@ Protocol tests проверяют:
 4. RAW → physical conversion после получения подтверждённых коэффициентов.
 5. История и тренды параметров.
 6. Адаптер/плагин для MilTechStation.
+
+
+## Offline emulator
+
+When the stand is unavailable, select **"Эмулятор (без сети)"** in the
+application header and press **"Запустить"**.
+
+This mode does not open Npcap and does not transmit anything through a Windows
+network adapter. It generates complete synthetic Ethernet/IPv4/UDP frames and
+feeds them into the same `PacketQueue` used by live capture.
+
+One 10 ms simulation tick currently generates:
+
+- BCVM -> KASU PP: current paged 1024-byte frame, page = `counter % 10 + 1`;
+- KASU PP -> BCVM: current 64-byte normal response;
+- YLS -> consumers: 1432-byte payload with `yaz_data[12][3][24]`;
+- YNP -> BCVM: 512 bytes = 100-byte main packet + 412-byte diagnostic page.
+
+The YNP simulator uses the current endpoint `192.168.17.240:200 -> 192.168.17.246:100`.
+The first 100 bytes follow the YNP firmware wire layout. Diagnostics use the
+18-page map. MNP A contains deterministic synthetic frames; MNP B is zero-filled
+because the second receiver is not installed. Frame 3403 is also zero-filled
+because its actual transmission has not been confirmed.
+
+BCVM pages 1-5 are populated from the supplied protocol maps. Pages 6-10 contain
+only common header fields and zero reserve until their wire layouts are supplied.
+
+The decoder keeps compatibility with the deployed 400/100-byte BCVM/KASU
+exchange so a later test on the old stand remains possible.

@@ -4,6 +4,7 @@
 #include "protocol/kasupp_decoder.h"
 #include "protocol/source_registry.h"
 #include "protocol/yls_yaz_decoder.h"
+#include "protocol/ynp_decoder.h"
 
 namespace telemetry {
 
@@ -49,7 +50,8 @@ void DecoderService::run() {
             continue;
         }
 
-        const auto source = protocol::classifySource(udp->sourceMac);
+        const auto source = protocol::classifySource(
+            udp->sourceMac, udp->sourceIpv4, udp->sourcePort);
         if (!source) {
             ++unknownSources_;
             continue;
@@ -69,6 +71,10 @@ void DecoderService::run() {
         case SourceKind::Yls:
             decoded = protocol::decodeYlsYaz(udp->payload, packet.captureTimestampNs,
                                              source->name, batch);
+            break;
+        case SourceKind::Ynp:
+            decoded = protocol::decodeYnpToBcvm(udp->payload, packet.captureTimestampNs,
+                                                source->name, batch);
             break;
         default:
             break;
