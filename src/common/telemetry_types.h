@@ -10,7 +10,8 @@ enum class SourceKind : std::uint8_t {
     Unknown,
     Bcvm,
     Kasupp,
-    Yls
+    Yls,
+    Ynp
 };
 
 struct TelemetryValue {
@@ -32,6 +33,7 @@ inline const char* toString(SourceKind source) noexcept {
     case SourceKind::Bcvm: return "BCVM";
     case SourceKind::Kasupp: return "KASUPP";
     case SourceKind::Yls: return "YLS";
+    case SourceKind::Ynp: return "YNP";
     default: return "UNKNOWN";
     }
 }
