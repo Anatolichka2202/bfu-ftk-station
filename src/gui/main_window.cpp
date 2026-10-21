@@ -111,11 +111,13 @@ QString displaySourceName(std::string_view name) {
 } // namespace
 
 MainWindow::MainWindow(CaptureService& capture,
+                       simulation::SimulationService& simulation,
                        DecoderService& decoder,
                        TelemetryTableModel& model,
                        QWidget* parent)
     : QMainWindow(parent),
       capture_(capture),
+      simulation_(simulation),
       decoder_(decoder),
       model_(model) {
     setWindowTitle(QStringLiteral("БСУ ФТК — станция телеметрии"));
@@ -168,6 +170,14 @@ MainWindow::MainWindow(CaptureService& capture,
     controls->setContentsMargins(14, 10, 14, 10);
     controls->setSpacing(8);
 
+    auto* modeCaption =
+        new QLabel(QStringLiteral("Источник"), controlsPanel);
+    modeCaption->setObjectName(QStringLiteral("fieldCaption"));
+
+    inputMode_ = new QComboBox(controlsPanel);
+    inputMode_->addItem(QStringLiteral("Живая линия (Npcap)"), 0);
+    inputMode_->addItem(QStringLiteral("Эмулятор (без сети)"), 1);
+
     auto* adapterCaption =
         new QLabel(QStringLiteral("Интерфейс"), controlsPanel);
     adapterCaption->setObjectName(QStringLiteral("fieldCaption"));
@@ -188,6 +198,9 @@ MainWindow::MainWindow(CaptureService& capture,
     stop_->setObjectName(QStringLiteral("dangerButton"));
     stop_->setEnabled(false);
 
+    controls->addWidget(modeCaption);
+    controls->addWidget(inputMode_);
+    controls->addSpacing(8);
     controls->addWidget(adapterCaption);
     controls->addWidget(devices_, 1);
     controls->addWidget(refreshDevices_);
@@ -313,6 +326,8 @@ MainWindow::MainWindow(CaptureService& capture,
 
     setCentralWidget(central);
 
+    connect(inputMode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::updateInputMode);
     connect(refreshDevices_, &QPushButton::clicked,
             this, &MainWindow::refreshDevices);
     connect(start_, &QPushButton::clicked,
@@ -497,6 +512,7 @@ MainWindow::MainWindow(CaptureService& capture,
 
     setCaptureState(QStringLiteral("ОСТАНОВЛЕНО"), "idle");
     refreshDevices();
+    updateInputMode();
 }
 
 void MainWindow::buildSourceTree() {
@@ -525,6 +541,12 @@ void MainWindow::buildSourceTree() {
     yls->setData(
         0, Qt::UserRole, QStringLiteral("contains:.YLS."));
 
+    auto* ynp =
+        new QTreeWidgetItem(
+            sources_, {QStringLiteral("ЯНП")});
+    ynp->setData(
+        0, Qt::UserRole, QStringLiteral("prefix:YNP."));
+
     for (const auto& source : protocol::knownSources()) {
         QTreeWidgetItem* parent = nullptr;
 
@@ -537,6 +559,9 @@ void MainWindow::buildSourceTree() {
             break;
         case SourceKind::Yls:
             parent = yls;
+            break;
+        case SourceKind::Ynp:
+            parent = ynp;
             break;
         default:
             break;
@@ -559,6 +584,7 @@ void MainWindow::buildSourceTree() {
     bcvm->setExpanded(true);
     kasupp->setExpanded(true);
     yls->setExpanded(false);
+    ynp->setExpanded(true);
     sources_->setCurrentItem(all);
 }
 
@@ -605,22 +631,27 @@ void MainWindow::refreshDevices() {
 }
 
 void MainWindow::startCapture() {
-    if (devices_->currentIndex() < 0) return;
-
     std::string error;
-    const auto device =
-        devices_->currentData().toString().toStdString();
-    const auto bpf = protocol::buildCaptureFilter();
 
-    if (!capture_.start(device, bpf, error)) {
-        setCaptureState(QStringLiteral("ОШИБКА"), "error");
-        diagnostics_->setText(QString::fromStdString(error));
-        return;
+    if (simulationMode()) {
+        simulation_.start();
+    } else {
+        if (devices_->currentIndex() < 0) return;
+        const auto device =
+            devices_->currentData().toString().toStdString();
+        const auto bpf = protocol::buildCaptureFilter();
+
+        if (!capture_.start(device, bpf, error)) {
+            setCaptureState(QStringLiteral("ОШИБКА"), "error");
+            diagnostics_->setText(QString::fromStdString(error));
+            return;
+        }
     }
 
     lastCaptured_ = 0;
     activitySeen_ = false;
 
+    inputMode_->setEnabled(false);
     devices_->setEnabled(false);
     refreshDevices_->setEnabled(false);
     start_->setEnabled(false);
@@ -632,11 +663,12 @@ void MainWindow::startCapture() {
 
 void MainWindow::stopCapture() {
     capture_.stop();
+    simulation_.stop();
 
-    devices_->setEnabled(true);
-    refreshDevices_->setEnabled(true);
+    inputMode_->setEnabled(true);
     start_->setEnabled(true);
     stop_->setEnabled(false);
+    updateInputMode();
 
     setCaptureState(QStringLiteral("ОСТАНОВЛЕНО"), "idle");
 }
@@ -664,11 +696,17 @@ void MainWindow::setCaptureState(const QString& text,
 
 void MainWindow::updateStatus() {
     const auto cs = capture_.stats();
+    const auto ss = simulation_.stats();
     const auto ds = decoder_.stats();
 
-    if (cs.captured != lastCaptured_) {
-        lastCaptured_ = cs.captured;
+    const bool simulated = simulationMode() || simulation_.running();
+    const auto received = simulated ? ss.generated : cs.captured;
+    const auto inputDrops = simulated
+        ? ss.queueDrops
+        : (cs.queueDrops + cs.pcapDropped + cs.pcapInterfaceDropped);
 
+    if (received != lastCaptured_) {
+        lastCaptured_ = received;
         if (!activitySeen_) {
             activitySeen_ = true;
             activityTimer_.start();
@@ -677,69 +715,77 @@ void MainWindow::updateStatus() {
         }
     }
 
-    const auto totalDrops =
-        cs.queueDrops + cs.pcapDropped + ds.batchDrops;
-    const auto totalErrors =
-        ds.parseErrors + ds.unknownSources;
+    const auto totalDrops = inputDrops + ds.batchDrops;
+    const auto totalErrors = ds.parseErrors + ds.unknownSources;
 
-    rxValue_->setText(QString::number(cs.captured));
+    rxValue_->setText(QString::number(received));
     dropValue_->setText(QString::number(totalDrops));
-    decodedValue_->setText(
-        QString::number(ds.packetsDecoded));
+    decodedValue_->setText(QString::number(ds.packetsDecoded));
     errorValue_->setText(QString::number(totalErrors));
-
     activityValue_->setText(
         activitySeen_
-            ? QStringLiteral("%1 мс")
-                  .arg(activityTimer_.elapsed())
+            ? QStringLiteral("%1 мс").arg(activityTimer_.elapsed())
             : QStringLiteral("—"));
 
-    const auto error = capture_.lastError();
+    const auto error = simulated ? std::string{} : capture_.lastError();
+    const bool running = simulated ? simulation_.running() : capture_.running();
 
-    if (capture_.running()) {
-        if (activitySeen_ &&
-            activityTimer_.elapsed() < 1200) {
-            setCaptureState(
-                QStringLiteral("ПРИЁМ"), "running");
-        } else {
-            setCaptureState(
-                QStringLiteral("НЕТ КАДРОВ"), "warning");
-        }
-    } else if (!error.empty()) {
+    if (running) {
         setCaptureState(
-            QStringLiteral("ОШИБКА"), "error");
-
+            activitySeen_ && activityTimer_.elapsed() < 1200
+                ? (simulated ? QStringLiteral("ЭМУЛЯЦИЯ") : QStringLiteral("ПРИЁМ"))
+                : QStringLiteral("НЕТ КАДРОВ"),
+            activitySeen_ && activityTimer_.elapsed() < 1200
+                ? "running" : "warning");
+    } else if (!error.empty()) {
+        setCaptureState(QStringLiteral("ОШИБКА"), "error");
         if (stop_->isEnabled()) {
             stop_->setEnabled(false);
             start_->setEnabled(true);
-            devices_->setEnabled(true);
-            refreshDevices_->setEnabled(true);
+            inputMode_->setEnabled(true);
+            updateInputMode();
         }
     } else if (stop_->isEnabled()) {
         stop_->setEnabled(false);
         start_->setEnabled(true);
-        devices_->setEnabled(true);
-        refreshDevices_->setEnabled(true);
-
-        setCaptureState(
-            QStringLiteral("ОСТАНОВЛЕНО"), "idle");
+        inputMode_->setEnabled(true);
+        updateInputMode();
+        setCaptureState(QStringLiteral("ОСТАНОВЛЕНО"), "idle");
     }
 
     diagnostics_->setText(
-        QStringLiteral(
-            "capture_queue_drop=%1  pcap_drop=%2  "
-            "if_drop=%3  parse_error=%4  unknown=%5  "
-            "batch_drop=%6%7")
-            .arg(cs.queueDrops)
-            .arg(cs.pcapDropped)
-            .arg(cs.pcapInterfaceDropped)
-            .arg(ds.parseErrors)
-            .arg(ds.unknownSources)
-            .arg(ds.batchDrops)
-            .arg(error.empty()
-                     ? QString{}
-                     : QStringLiteral("  |  ") +
-                           QString::fromStdString(error)));
+        simulated
+            ? QStringLiteral(
+                  "mode=simulation  queue_drop=%1  parse_error=%2  "
+                  "unknown=%3  batch_drop=%4")
+                  .arg(ss.queueDrops)
+                  .arg(ds.parseErrors)
+                  .arg(ds.unknownSources)
+                  .arg(ds.batchDrops)
+            : QStringLiteral(
+                  "mode=npcap  capture_queue_drop=%1  pcap_drop=%2  "
+                  "if_drop=%3  parse_error=%4  unknown=%5  batch_drop=%6%7")
+                  .arg(cs.queueDrops)
+                  .arg(cs.pcapDropped)
+                  .arg(cs.pcapInterfaceDropped)
+                  .arg(ds.parseErrors)
+                  .arg(ds.unknownSources)
+                  .arg(ds.batchDrops)
+                  .arg(error.empty()
+                           ? QString{}
+                           : QStringLiteral("  |  ") +
+                                 QString::fromStdString(error)));
 }
+
+bool MainWindow::simulationMode() const {
+    return inputMode_ && inputMode_->currentData().toInt() == 1;
+}
+
+void MainWindow::updateInputMode() {
+    const bool live = !simulationMode();
+    devices_->setEnabled(live && !capture_.running() && !simulation_.running());
+    refreshDevices_->setEnabled(live && !capture_.running() && !simulation_.running());
+}
+
 
 } // namespace telemetry::ui
