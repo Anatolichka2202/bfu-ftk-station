@@ -13,6 +13,8 @@ add_library(telemetry_core STATIC
     src/common/bounded_spsc_queue.h
     src/common/raw_packet.h
     src/common/telemetry_types.h
+    src/protocol/crc16.h
+    src/protocol/crc16.cpp
     src/protocol/ethernet_udp_parser.h
     src/protocol/ethernet_udp_parser.cpp
     src/protocol/source_registry.h
@@ -21,6 +23,12 @@ add_library(telemetry_core STATIC
     src/protocol/kasupp_decoder.cpp
     src/protocol/yls_yaz_decoder.h
     src/protocol/yls_yaz_decoder.cpp
+    src/protocol/ynp_decoder.h
+    src/protocol/ynp_decoder.cpp
+    src/simulation/simulated_packets.h
+    src/simulation/simulated_packets.cpp
+    src/simulation/simulation_service.h
+    src/simulation/simulation_service.cpp
     src/telemetry/decoder_service.h
     src/telemetry/decoder_service.cpp
 )
@@ -78,10 +86,13 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(protocol_tests
         tests/protocol_tests.cpp
+        src/protocol/crc16.cpp
         src/protocol/ethernet_udp_parser.cpp
         src/protocol/source_registry.cpp
         src/protocol/kasupp_decoder.cpp
         src/protocol/yls_yaz_decoder.cpp
+        src/protocol/ynp_decoder.cpp
+        src/simulation/simulated_packets.cpp
     )
     target_include_directories(protocol_tests PRIVATE src)
     add_test(NAME protocol_tests COMMAND protocol_tests)
