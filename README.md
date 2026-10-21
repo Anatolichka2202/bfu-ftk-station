@@ -1,60 +1,157 @@
-# БСУ ФТК — станция телеметрии (MVP)
+# БСУ ФТК — станция телеметрии
 
-Первый рабочий каркас пассивной станции телеметрии:
+Пассивная станция мониторинга широковещательной Ethernet-линии.
 
-`Npcap L2 capture -> bounded SPSC queue -> decoder thread -> batch queue -> Qt Model/View`.
+```text
+Npcap / NDIS
+    ↓
+CaptureService              отдельный поток
+    ↓
+bounded SPSC PacketQueue
+    ↓
+DecoderService              отдельный поток
+    ↓
+bounded SPSC BatchQueue
+    ↓
+TelemetryTableModel         GUI thread
+    ↓
+QSortFilterProxyModel
+    ↓
+QTableView
+```
 
-## Сейчас реализовано
+## Что реализовано
 
-- пассивный Ethernet capture через Npcap/libpcap;
-- BPF: только L2 broadcast от известных MAC БЦВМ / КАСУПП / ЯЛС;
-- capture timestamp берётся из pcap header, а не из GUI/user processing time;
-- immediate mode + 4 MiB capture buffer;
-- отдельный capture thread и decoder thread;
-- bounded очереди и счётчики переполнения;
-- Ethernet + VLAN + IPv4 + UDP parser;
-- RAW decoder БЦВМ -> КАСУПП (400 byte payload);
-- RAW decoder КАСУПП -> БЦВМ (100 byte payload);
-- RAW decoder `yaz_data[12][3][24]` из пакета ЯЛС;
-- `QAbstractTableModel + QSortFilterProxyModel + QTableView`;
-- GUI обновляется ~30 Hz, независимо от частоты приёма 100 Hz;
-- отображение capture/drop/decode counters.
+### Захват
 
-## YLS / YAZ
+- Npcap/libpcap, L2 Ethernet capture;
+- станция ничего не передаёт в контролируемую линию;
+- promiscuous mode отключён: рабочая линия использует Ethernet broadcast;
+- BPF оставляет только UDP broadcast от известных MAC;
+- проверяется, что выбранный Npcap-интерфейс выдаёт Ethernet-кадры `DLT_EN10MB`;
+- `snaplen = 2048`, capture buffer 4 MiB, immediate mode;
+- timestamp берётся из pcap header до пользовательской обработки;
+- отдельные счётчики Npcap drops, capture queue drops и interface drops.
 
-По исходникам `YLS-main`:
+### Разбор Ethernet
 
-- ЯЛС получает от каждого ЯАЗ 32 байта;
-- в Ethernet копируются байты `0..23`;
-- в packed `YLSToYVData` фактический offset `yaz_data` равен `223`;
-- структура: `12 BKD x 3 YAZ x 24 bytes`;
-- текущий `ethernet.c` отправляет UDP payload длиной 1432 байта.
+Поддерживается:
 
-Физический пересчёт пока намеренно отсутствует: UI показывает RAW-коды.
+```text
+Ethernet
+802.1Q / 802.1ad VLAN
+IPv4
+UDP
+```
+
+Парсер:
+
+- проверяет заявленную длину IPv4;
+- проверяет UDP length;
+- не принимает усечённые кадры;
+- не пытается декодировать IPv4-фрагменты;
+- передаёт protocol decoder только полный UDP payload.
+
+### БЦВМ ↔ КАСУ ПП
+
+Для рабочего протокола используются:
+
+- БЦВМ → КАСУ ПП: payload 400 байт;
+- КАСУ ПП → БЦВМ: payload 100 байт;
+- версия протокола: 2;
+- многобайтовые поля: big endian;
+- CRC16: polynomial `0x1021`, init `0xFFFF`, xorout `0`, без reflection;
+- CRC хранится big endian.
+
+Из штатного 400-байтового пакета сейчас выводятся RAW-данные БЦВМ,
+пиросредств, приводов, БСЭП, процессоров и шаг циклограммы.
+
+Физические величины намеренно пока не вычисляются.
+
+### ЯЛС / ЯАЗ
+
+По исходникам YLS:
+
+- ЯАЗ сам не участвует в Ethernet-обмене;
+- ЯЛС принимает 32-байтовый ответ ЯАЗ;
+- в Ethernet-пакет ЯЛС попадают первые 24 байта;
+- фактический packed offset `yaz_data` — 223;
+- `yaz_data[12][3][24]`;
+- ожидаемый UDP payload ЯЛС — ровно 1432 байта.
+
+Сейчас декодируются RAW-коды:
+
+- `engine_revs1..5`;
+- `tp_data*`;
+- флаги давления/контроля;
+- `time_ms`.
+
+### GUI
+
+Интерфейс построен на Qt Model/View:
+
+- слева дерево источников: БЦВМ, КАСУ ПП, ЯЛС/ЯАЗ;
+- справа таблица телеметрии;
+- поиск по источнику, устройству и параметру;
+- отображается RAW-код и возраст значения относительно самого свежего capture timestamp;
+- абсолютный timestamp доступен через tooltip;
+- отдельная индикация состояния приёма;
+- counters: RX, drops, decoded, errors;
+- низкоуровневая диагностика вынесена в нижнюю строку.
+
+Capture и decoder не зависят от частоты перерисовки GUI.
+Модель обновляется примерно 30 раз/с и схлопывает промежуточные обновления
+одного параметра, сохраняя последнее значение за GUI-такт.
 
 ## Windows build
 
-Нужны:
+Проверенная пользовательская конфигурация проекта:
 
-- CMake >= 3.21
-- C++20 compiler (MSVC 2022)
-- Qt 5 или Qt 6 Widgets
-- установленный Npcap runtime
-- Npcap SDK
+- Windows 10;
+- Qt 6.8.0;
+- llvm-mingw 64-bit;
+- CMake + Ninja;
+- Npcap runtime;
+- Npcap SDK.
 
-Пример:
+В Qt Creator нужно задать CMake variable:
 
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" `
-  -DNPCAP_SDK_ROOT=C:/SDK/npcap-sdk
-cmake --build build --config Release
+```text
+NPCAP_SDK_ROOT=C:/path/to/npcap-sdk
 ```
 
-Запускать с правами, позволяющими открыть Npcap adapter.
+В каталоге SDK должны существовать:
 
-## Следующий шаг
+```text
+Include/pcap.h
+Lib/x64/wpcap.lib
+Lib/x64/Packet.lib
+```
 
-1. Проверить на реальном `.pcap/.pcapng` или живой линии фактические MAC/UDP payload sizes.
-2. Зафиксировать конкретные ЯЛС, которые несут интересующий ЯАЗ.
-3. Добавить replay backend для воспроизводимого тестирования.
-4. После получения коэффициентов добавить RAW -> physical conversion без изменения GUI model/view.
+После изменения CMake cache при необходимости удалить build-каталог и
+запустить Configure заново.
+
+## Тесты
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Protocol tests проверяют:
+
+- Ethernet/IPv4/UDP parsing;
+- отказ на IPv4 fragments;
+- отказ на truncated frames;
+- CRC БЦВМ;
+- CRC КАСУ ПП;
+- точный размер YLS telemetry payload;
+- базовый layout YAZ RAW record.
+
+## Следующие этапы
+
+1. Проверка на живой линии и сохранение контрольного PCAP/PCAPNG.
+2. Replay backend для воспроизводимых тестов без стенда.
+3. Уточнение перечня отображаемой ТМИ.
+4. RAW → physical conversion после получения подтверждённых коэффициентов.
+5. История и тренды параметров.
+6. Адаптер/плагин для MilTechStation.
