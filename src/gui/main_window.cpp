@@ -2,126 +2,744 @@
 
 #include "protocol/source_registry.h"
 
+#include <QAbstractItemView>
 #include <QComboBox>
+#include <QFrame>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
+#include <QSplitter>
+#include <QStyle>
 #include <QTableView>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QWidget>
 
-namespace telemetry::ui {
+#include <string_view>
+#include <utility>
 
-MainWindow::MainWindow(CaptureService& capture, DecoderService& decoder,
-                       TelemetryTableModel& model, QWidget* parent)
-    : QMainWindow(parent), capture_(capture), decoder_(decoder), model_(model) {
-    setWindowTitle(QStringLiteral("БСУ ФТК — телеметрия"));
-    resize(1250, 760);
+namespace telemetry::ui {
+namespace {
+
+class TelemetryFilterProxy final : public QSortFilterProxyModel {
+public:
+    explicit TelemetryFilterProxy(QObject* parent = nullptr)
+        : QSortFilterProxyModel(parent) {}
+
+    void setSourceToken(QString token) {
+        sourceToken_ = std::move(token);
+        invalidateFilter();
+    }
+
+    void setSearchText(QString text) {
+        searchText_ = std::move(text).trimmed();
+        invalidateFilter();
+    }
+
+protected:
+    bool filterAcceptsRow(int sourceRow,
+                          const QModelIndex& sourceParent) const override {
+        const auto sourceIndex =
+            sourceModel()->index(sourceRow, TelemetryTableModel::Source,
+                                 sourceParent);
+        const auto source = sourceIndex.data(Qt::DisplayRole).toString();
+
+        bool sourceAccepted = true;
+        if (sourceToken_.startsWith(QStringLiteral("prefix:"))) {
+            sourceAccepted =
+                source.startsWith(sourceToken_.mid(7), Qt::CaseInsensitive);
+        } else if (sourceToken_.startsWith(QStringLiteral("contains:"))) {
+            sourceAccepted =
+                source.contains(sourceToken_.mid(9), Qt::CaseInsensitive);
+        } else if (sourceToken_.startsWith(QStringLiteral("exact:"))) {
+            sourceAccepted =
+                source.compare(sourceToken_.mid(6), Qt::CaseInsensitive) == 0;
+        }
+
+        if (!sourceAccepted) return false;
+        if (searchText_.isEmpty()) return true;
+
+        for (int column = 0;
+             column < TelemetryTableModel::ColumnCount;
+             ++column) {
+            const auto text =
+                sourceModel()->index(sourceRow, column, sourceParent)
+                    .data(Qt::DisplayRole)
+                    .toString();
+            if (text.contains(searchText_, Qt::CaseInsensitive))
+                return true;
+        }
+        return false;
+    }
+
+private:
+    QString sourceToken_{QStringLiteral("all")};
+    QString searchText_;
+};
+
+QFrame* makeMetricCard(QWidget* parent,
+                       const QString& title,
+                       QLabel*& value) {
+    auto* card = new QFrame(parent);
+    card->setObjectName(QStringLiteral("metricCard"));
+
+    auto* layout = new QVBoxLayout(card);
+    layout->setContentsMargins(14, 10, 14, 10);
+    layout->setSpacing(2);
+
+    auto* caption = new QLabel(title, card);
+    caption->setObjectName(QStringLiteral("metricCaption"));
+
+    value = new QLabel(QStringLiteral("0"), card);
+    value->setObjectName(QStringLiteral("metricValue"));
+
+    layout->addWidget(caption);
+    layout->addWidget(value);
+    return card;
+}
+
+QString displaySourceName(std::string_view name) {
+    auto text =
+        QString::fromUtf8(name.data(), static_cast<int>(name.size()));
+    return text.replace(QLatin1Char('.'), QStringLiteral(" / "));
+}
+
+} // namespace
+
+MainWindow::MainWindow(CaptureService& capture,
+                       DecoderService& decoder,
+                       TelemetryTableModel& model,
+                       QWidget* parent)
+    : QMainWindow(parent),
+      capture_(capture),
+      decoder_(decoder),
+      model_(model) {
+    setWindowTitle(QStringLiteral("БСУ ФТК — станция телеметрии"));
+    resize(1440, 900);
+    setMinimumSize(1100, 700);
 
     auto* central = new QWidget(this);
+    central->setObjectName(QStringLiteral("centralRoot"));
+
     auto* root = new QVBoxLayout(central);
-    auto* controls = new QHBoxLayout;
+    root->setContentsMargins(16, 16, 16, 14);
+    root->setSpacing(12);
 
-    devices_ = new QComboBox(central);
-    start_ = new QPushButton(QStringLiteral("Старт"), central);
-    stop_ = new QPushButton(QStringLiteral("Стоп"), central);
+    auto* titleBar = new QFrame(central);
+    titleBar->setObjectName(QStringLiteral("topBar"));
+
+    auto* titleLayout = new QHBoxLayout(titleBar);
+    titleLayout->setContentsMargins(16, 12, 16, 12);
+
+    auto* titleBlock = new QVBoxLayout;
+    titleBlock->setSpacing(0);
+
+    auto* title = new QLabel(QStringLiteral("БСУ ФТК"), titleBar);
+    title->setObjectName(QStringLiteral("screenTitle"));
+
+    auto* subtitle = new QLabel(
+        QStringLiteral(
+            "Станция телеметрии · пассивный Ethernet-монитор"),
+        titleBar);
+    subtitle->setObjectName(QStringLiteral("screenSubtitle"));
+
+    titleBlock->addWidget(title);
+    titleBlock->addWidget(subtitle);
+
+    titleLayout->addLayout(titleBlock);
+    titleLayout->addStretch();
+
+    captureState_ = new QLabel(titleBar);
+    captureState_->setObjectName(QStringLiteral("captureState"));
+    captureState_->setAlignment(Qt::AlignCenter);
+    captureState_->setMinimumWidth(150);
+    titleLayout->addWidget(captureState_);
+
+    root->addWidget(titleBar);
+
+    auto* controlsPanel = new QFrame(central);
+    controlsPanel->setObjectName(QStringLiteral("panel"));
+
+    auto* controls = new QHBoxLayout(controlsPanel);
+    controls->setContentsMargins(14, 10, 14, 10);
+    controls->setSpacing(8);
+
+    auto* adapterCaption =
+        new QLabel(QStringLiteral("Интерфейс"), controlsPanel);
+    adapterCaption->setObjectName(QStringLiteral("fieldCaption"));
+
+    devices_ = new QComboBox(controlsPanel);
+    devices_->setMinimumWidth(360);
+
+    refreshDevices_ =
+        new QPushButton(QStringLiteral("Обновить"), controlsPanel);
+    refreshDevices_->setObjectName(QStringLiteral("secondaryButton"));
+
+    start_ =
+        new QPushButton(QStringLiteral("Запустить"), controlsPanel);
+    start_->setObjectName(QStringLiteral("primaryButton"));
+
+    stop_ =
+        new QPushButton(QStringLiteral("Остановить"), controlsPanel);
+    stop_->setObjectName(QStringLiteral("dangerButton"));
     stop_->setEnabled(false);
-    filter_ = new QLineEdit(central);
-    filter_->setPlaceholderText(QStringLiteral("Фильтр по источнику / устройству / параметру"));
-    status_ = new QLabel(QStringLiteral("Остановлено"), central);
 
-    controls->addWidget(devices_, 2);
+    controls->addWidget(adapterCaption);
+    controls->addWidget(devices_, 1);
+    controls->addWidget(refreshDevices_);
+    controls->addSpacing(8);
     controls->addWidget(start_);
     controls->addWidget(stop_);
-    controls->addWidget(filter_, 2);
-    root->addLayout(controls);
-    root->addWidget(status_);
 
-    proxy_ = new QSortFilterProxyModel(this);
+    root->addWidget(controlsPanel);
+
+    auto* metrics = new QHBoxLayout;
+    metrics->setSpacing(10);
+
+    metrics->addWidget(makeMetricCard(
+        central, QStringLiteral("Принято кадров"), rxValue_));
+    metrics->addWidget(makeMetricCard(
+        central, QStringLiteral("Потери"), dropValue_));
+    metrics->addWidget(makeMetricCard(
+        central, QStringLiteral("Декодировано"), decodedValue_));
+    metrics->addWidget(makeMetricCard(
+        central, QStringLiteral("Ошибки"), errorValue_));
+    metrics->addWidget(makeMetricCard(
+        central, QStringLiteral("Последняя активность"),
+        activityValue_));
+
+    root->addLayout(metrics);
+
+    auto* splitter = new QSplitter(Qt::Horizontal, central);
+    splitter->setChildrenCollapsible(false);
+
+    auto* sourcePanel = new QFrame;
+    sourcePanel->setObjectName(QStringLiteral("panel"));
+
+    auto* sourceLayout = new QVBoxLayout(sourcePanel);
+    sourceLayout->setContentsMargins(10, 12, 10, 10);
+
+    auto* sourceTitle =
+        new QLabel(QStringLiteral("ИСТОЧНИКИ"), sourcePanel);
+    sourceTitle->setObjectName(QStringLiteral("sectionTitle"));
+
+    sources_ = new QTreeWidget(sourcePanel);
+    sources_->setHeaderHidden(true);
+    sources_->setRootIsDecorated(true);
+    sources_->setUniformRowHeights(true);
+
+    sourceLayout->addWidget(sourceTitle);
+    sourceLayout->addWidget(sources_);
+    buildSourceTree();
+
+    auto* telemetryPanel = new QFrame;
+    telemetryPanel->setObjectName(QStringLiteral("panel"));
+
+    auto* telemetryLayout = new QVBoxLayout(telemetryPanel);
+    telemetryLayout->setContentsMargins(10, 12, 10, 10);
+    telemetryLayout->setSpacing(8);
+
+    auto* tableHeader = new QHBoxLayout;
+
+    auto* tableTitle =
+        new QLabel(QStringLiteral("ТЕЛЕМЕТРИЯ"), telemetryPanel);
+    tableTitle->setObjectName(QStringLiteral("sectionTitle"));
+
+    filter_ = new QLineEdit(telemetryPanel);
+    filter_->setClearButtonEnabled(true);
+    filter_->setPlaceholderText(
+        QStringLiteral(
+            "Поиск по источнику, устройству или параметру"));
+    filter_->setMaximumWidth(430);
+
+    tableHeader->addWidget(tableTitle);
+    tableHeader->addStretch();
+    tableHeader->addWidget(filter_);
+
+    telemetryLayout->addLayout(tableHeader);
+
+    proxy_ = new TelemetryFilterProxy(this);
     proxy_->setSourceModel(&model_);
-    proxy_->setFilterCaseSensitivity(Qt::CaseInsensitive);
-    proxy_->setFilterKeyColumn(-1);
+    proxy_->setDynamicSortFilter(true);
 
-    table_ = new QTableView(central);
+    table_ = new QTableView(telemetryPanel);
     table_->setModel(proxy_);
     table_->setSortingEnabled(true);
     table_->setAlternatingRowColors(true);
+    table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->verticalHeader()->setVisible(false);
-    table_->horizontalHeader()->setStretchLastSection(true);
-    table_->horizontalHeader()->setSectionResizeMode(TelemetryTableModel::Source, QHeaderView::ResizeToContents);
-    table_->horizontalHeader()->setSectionResizeMode(TelemetryTableModel::Device, QHeaderView::ResizeToContents);
-    table_->horizontalHeader()->setSectionResizeMode(TelemetryTableModel::Parameter, QHeaderView::Stretch);
-    root->addWidget(table_);
+
+    table_->horizontalHeader()->setSectionResizeMode(
+        TelemetryTableModel::Source,
+        QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(
+        TelemetryTableModel::Device,
+        QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(
+        TelemetryTableModel::Parameter,
+        QHeaderView::Stretch);
+    table_->horizontalHeader()->setSectionResizeMode(
+        TelemetryTableModel::RawValue,
+        QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(
+        TelemetryTableModel::AgeMs,
+        QHeaderView::ResizeToContents);
+
+    table_->sortByColumn(
+        TelemetryTableModel::Source, Qt::AscendingOrder);
+
+    telemetryLayout->addWidget(table_);
+
+    splitter->addWidget(sourcePanel);
+    splitter->addWidget(telemetryPanel);
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({250, 1050});
+
+    root->addWidget(splitter, 1);
+
+    diagnostics_ =
+        new QLabel(QStringLiteral("Готово к запуску"), central);
+    diagnostics_->setObjectName(QStringLiteral("diagnostics"));
+    diagnostics_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    root->addWidget(diagnostics_);
+
     setCentralWidget(central);
 
-    connect(start_, &QPushButton::clicked, this, &MainWindow::startCapture);
-    connect(stop_, &QPushButton::clicked, this, &MainWindow::stopCapture);
-#if QT_VERSION >= QT_VERSION_CHECK(5, 12, 0)
-    connect(filter_, &QLineEdit::textChanged, proxy_, &QSortFilterProxyModel::setFilterFixedString);
-#endif
+    connect(refreshDevices_, &QPushButton::clicked,
+            this, &MainWindow::refreshDevices);
+    connect(start_, &QPushButton::clicked,
+            this, &MainWindow::startCapture);
+    connect(stop_, &QPushButton::clicked,
+            this, &MainWindow::stopCapture);
+
+    connect(filter_, &QLineEdit::textChanged,
+            this, [this](const QString& text) {
+                static_cast<TelemetryFilterProxy*>(proxy_)
+                    ->setSearchText(text);
+            });
+
+    connect(sources_, &QTreeWidget::currentItemChanged,
+            this, [this] { applySourceFilter(); });
 
     drainTimer_ = new QTimer(this);
-    drainTimer_->setInterval(33); // GUI refresh ~30 Hz; capture/decoder remain independent.
-    connect(drainTimer_, &QTimer::timeout, &model_, &TelemetryTableModel::drain);
+    drainTimer_->setInterval(33);
+    connect(drainTimer_, &QTimer::timeout,
+            &model_, &TelemetryTableModel::drain);
     drainTimer_->start();
 
     statusTimer_ = new QTimer(this);
-    statusTimer_->setInterval(500);
-    connect(statusTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
+    statusTimer_->setInterval(250);
+    connect(statusTimer_, &QTimer::timeout,
+            this, &MainWindow::updateStatus);
     statusTimer_->start();
 
+    setStyleSheet(QStringLiteral(R"(
+        QMainWindow, QWidget#centralRoot {
+            background: #10171f;
+            color: #dce6ef;
+        }
+
+        QFrame#topBar,
+        QFrame#panel,
+        QFrame#metricCard {
+            background: #17212b;
+            border: 1px solid #2a3946;
+            border-radius: 6px;
+        }
+
+        QLabel#screenTitle {
+            font-size: 22px;
+            font-weight: 700;
+            color: #f3f7fa;
+        }
+
+        QLabel#screenSubtitle {
+            font-size: 12px;
+            color: #8fa2b3;
+        }
+
+        QLabel#sectionTitle,
+        QLabel#fieldCaption,
+        QLabel#metricCaption {
+            color: #90a4b5;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        QLabel#metricValue {
+            color: #eef4f8;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        QLabel#captureState {
+            padding: 7px 12px;
+            border-radius: 4px;
+            font-weight: 700;
+        }
+
+        QLabel#captureState[state="idle"] {
+            background: #26323d;
+            color: #aebdca;
+        }
+
+        QLabel#captureState[state="running"] {
+            background: #143b32;
+            color: #67d7b0;
+            border: 1px solid #2b735e;
+        }
+
+        QLabel#captureState[state="warning"] {
+            background: #44371d;
+            color: #f2c76e;
+            border: 1px solid #7d6328;
+        }
+
+        QLabel#captureState[state="error"] {
+            background: #48272b;
+            color: #ff9199;
+            border: 1px solid #8a3f48;
+        }
+
+        QComboBox,
+        QLineEdit {
+            background: #0f171e;
+            color: #e1e9ef;
+            border: 1px solid #344554;
+            border-radius: 4px;
+            padding: 6px 8px;
+            min-height: 22px;
+        }
+
+        QComboBox:focus,
+        QLineEdit:focus {
+            border: 1px solid #4b91d1;
+        }
+
+        QPushButton {
+            background: #263643;
+            color: #dfe8ee;
+            border: 1px solid #3b4d5b;
+            border-radius: 4px;
+            padding: 7px 14px;
+            font-weight: 600;
+        }
+
+        QPushButton:hover {
+            background: #304454;
+        }
+
+        QPushButton:disabled {
+            color: #637482;
+            background: #1a252e;
+            border-color: #293641;
+        }
+
+        QPushButton#primaryButton {
+            background: #1d5f91;
+            border-color: #2e7fba;
+            color: white;
+        }
+
+        QPushButton#primaryButton:hover {
+            background: #246fa7;
+        }
+
+        QPushButton#dangerButton {
+            background: #603038;
+            border-color: #87434e;
+        }
+
+        QTreeWidget,
+        QTableView {
+            background: #111a22;
+            alternate-background-color: #15202a;
+            color: #dce6ef;
+            border: 1px solid #283744;
+            gridline-color: #263540;
+            selection-background-color: #244d6c;
+            selection-color: #ffffff;
+        }
+
+        QTreeWidget::item {
+            padding: 5px 4px;
+        }
+
+        QHeaderView::section {
+            background: #1b2833;
+            color: #9fb1c0;
+            border: 0;
+            border-right: 1px solid #2c3a46;
+            border-bottom: 1px solid #334451;
+            padding: 7px 8px;
+            font-weight: 600;
+        }
+
+        QLabel#diagnostics {
+            color: #728798;
+            font-family: monospace;
+            padding: 2px 4px;
+        }
+
+        QSplitter::handle {
+            background: #10171f;
+            width: 8px;
+        }
+    )"));
+
+    setCaptureState(QStringLiteral("ОСТАНОВЛЕНО"), "idle");
     refreshDevices();
 }
 
+void MainWindow::buildSourceTree() {
+    sources_->clear();
+
+    auto* all =
+        new QTreeWidgetItem(
+            sources_, {QStringLiteral("Все источники")});
+    all->setData(0, Qt::UserRole, QStringLiteral("all"));
+
+    auto* bcvm =
+        new QTreeWidgetItem(
+            sources_, {QStringLiteral("БЦВМ")});
+    bcvm->setData(
+        0, Qt::UserRole, QStringLiteral("prefix:BCVM."));
+
+    auto* kasupp =
+        new QTreeWidgetItem(
+            sources_, {QStringLiteral("КАСУ ПП")});
+    kasupp->setData(
+        0, Qt::UserRole, QStringLiteral("prefix:KASUPP."));
+
+    auto* yls =
+        new QTreeWidgetItem(
+            sources_, {QStringLiteral("ЯЛС / ЯАЗ")});
+    yls->setData(
+        0, Qt::UserRole, QStringLiteral("contains:.YLS."));
+
+    for (const auto& source : protocol::knownSources()) {
+        QTreeWidgetItem* parent = nullptr;
+
+        switch (source.kind) {
+        case SourceKind::Bcvm:
+            parent = bcvm;
+            break;
+        case SourceKind::Kasupp:
+            parent = kasupp;
+            break;
+        case SourceKind::Yls:
+            parent = yls;
+            break;
+        default:
+            break;
+        }
+
+        if (!parent) continue;
+
+        auto* item = new QTreeWidgetItem(
+            parent, {displaySourceName(source.name)});
+
+        item->setData(
+            0,
+            Qt::UserRole,
+            QStringLiteral("exact:") +
+                QString::fromUtf8(
+                    source.name.data(),
+                    static_cast<int>(source.name.size())));
+    }
+
+    bcvm->setExpanded(true);
+    kasupp->setExpanded(true);
+    yls->setExpanded(false);
+    sources_->setCurrentItem(all);
+}
+
 void MainWindow::refreshDevices() {
+    const auto previous = devices_->currentData().toString();
     devices_->clear();
+
     std::string error;
     const auto devices = CaptureService::availableDevices(error);
+
+    int restoreIndex = -1;
+    int index = 0;
+
     for (const auto& dev : devices) {
-        const auto label = dev.description.empty() ? dev.name : dev.description + " — " + dev.name;
-        devices_->addItem(QString::fromStdString(label), QString::fromStdString(dev.name));
+        const auto label =
+            dev.description.empty()
+                ? QStringLiteral("Ethernet-интерфейс %1")
+                      .arg(index + 1)
+                : QString::fromStdString(dev.description);
+
+        devices_->addItem(
+            label, QString::fromStdString(dev.name));
+
+        devices_->setItemData(
+            index,
+            QString::fromStdString(dev.name),
+            Qt::ToolTipRole);
+
+        if (QString::fromStdString(dev.name) == previous)
+            restoreIndex = index;
+
+        ++index;
     }
-    if (devices.empty() && !error.empty()) status_->setText(QString::fromStdString(error));
+
+    if (restoreIndex >= 0)
+        devices_->setCurrentIndex(restoreIndex);
+
+    if (devices.empty()) {
+        diagnostics_->setText(
+            error.empty()
+                ? QStringLiteral("Npcap-интерфейсы не найдены")
+                : QString::fromStdString(error));
+    }
 }
 
 void MainWindow::startCapture() {
     if (devices_->currentIndex() < 0) return;
+
     std::string error;
-    const auto device = devices_->currentData().toString().toStdString();
+    const auto device =
+        devices_->currentData().toString().toStdString();
     const auto bpf = protocol::buildCaptureFilter();
+
     if (!capture_.start(device, bpf, error)) {
-        QMessageBox::critical(this, QStringLiteral("Npcap"), QString::fromStdString(error));
+        setCaptureState(QStringLiteral("ОШИБКА"), "error");
+        diagnostics_->setText(QString::fromStdString(error));
         return;
     }
+
+    lastCaptured_ = 0;
+    activitySeen_ = false;
+
+    devices_->setEnabled(false);
+    refreshDevices_->setEnabled(false);
     start_->setEnabled(false);
     stop_->setEnabled(true);
+
+    setCaptureState(
+        QStringLiteral("ОЖИДАНИЕ ДАННЫХ"), "warning");
 }
 
 void MainWindow::stopCapture() {
     capture_.stop();
+
+    devices_->setEnabled(true);
+    refreshDevices_->setEnabled(true);
     start_->setEnabled(true);
     stop_->setEnabled(false);
+
+    setCaptureState(QStringLiteral("ОСТАНОВЛЕНО"), "idle");
+}
+
+void MainWindow::applySourceFilter() {
+    const auto* item = sources_->currentItem();
+    const auto token =
+        item
+            ? item->data(0, Qt::UserRole).toString()
+            : QStringLiteral("all");
+
+    static_cast<TelemetryFilterProxy*>(proxy_)
+        ->setSourceToken(token);
+}
+
+void MainWindow::setCaptureState(const QString& text,
+                                 const char* state) {
+    captureState_->setText(text);
+    captureState_->setProperty(
+        "state", QString::fromLatin1(state));
+
+    captureState_->style()->unpolish(captureState_);
+    captureState_->style()->polish(captureState_);
 }
 
 void MainWindow::updateStatus() {
     const auto cs = capture_.stats();
     const auto ds = decoder_.stats();
-    status_->setText(QStringLiteral(
-        "RX=%1  capture_queue_drop=%2  pcap_drop=%3  decoded=%4  parse_error=%5  batch_drop=%6")
-        .arg(cs.captured).arg(cs.queueDrops).arg(cs.pcapDropped)
-        .arg(ds.packetsDecoded).arg(ds.parseErrors).arg(ds.batchDrops));
 
-    if (!capture_.running() && stop_->isEnabled()) {
+    if (cs.captured != lastCaptured_) {
+        lastCaptured_ = cs.captured;
+
+        if (!activitySeen_) {
+            activitySeen_ = true;
+            activityTimer_.start();
+        } else {
+            activityTimer_.restart();
+        }
+    }
+
+    const auto totalDrops =
+        cs.queueDrops + cs.pcapDropped + ds.batchDrops;
+    const auto totalErrors =
+        ds.parseErrors + ds.unknownSources;
+
+    rxValue_->setText(QString::number(cs.captured));
+    dropValue_->setText(QString::number(totalDrops));
+    decodedValue_->setText(
+        QString::number(ds.packetsDecoded));
+    errorValue_->setText(QString::number(totalErrors));
+
+    activityValue_->setText(
+        activitySeen_
+            ? QStringLiteral("%1 мс")
+                  .arg(activityTimer_.elapsed())
+            : QStringLiteral("—"));
+
+    const auto error = capture_.lastError();
+
+    if (capture_.running()) {
+        if (activitySeen_ &&
+            activityTimer_.elapsed() < 1200) {
+            setCaptureState(
+                QStringLiteral("ПРИЁМ"), "running");
+        } else {
+            setCaptureState(
+                QStringLiteral("НЕТ КАДРОВ"), "warning");
+        }
+    } else if (!error.empty()) {
+        setCaptureState(
+            QStringLiteral("ОШИБКА"), "error");
+
+        if (stop_->isEnabled()) {
+            stop_->setEnabled(false);
+            start_->setEnabled(true);
+            devices_->setEnabled(true);
+            refreshDevices_->setEnabled(true);
+        }
+    } else if (stop_->isEnabled()) {
         stop_->setEnabled(false);
         start_->setEnabled(true);
-        const auto error = capture_.lastError();
-        if (!error.empty()) status_->setText(status_->text() + QStringLiteral("  ERROR: ") + QString::fromStdString(error));
+        devices_->setEnabled(true);
+        refreshDevices_->setEnabled(true);
+
+        setCaptureState(
+            QStringLiteral("ОСТАНОВЛЕНО"), "idle");
     }
+
+    diagnostics_->setText(
+        QStringLiteral(
+            "capture_queue_drop=%1  pcap_drop=%2  "
+            "if_drop=%3  parse_error=%4  unknown=%5  "
+            "batch_drop=%6%7")
+            .arg(cs.queueDrops)
+            .arg(cs.pcapDropped)
+            .arg(cs.pcapInterfaceDropped)
+            .arg(ds.parseErrors)
+            .arg(ds.unknownSources)
+            .arg(ds.batchDrops)
+            .arg(error.empty()
+                     ? QString{}
+                     : QStringLiteral("  |  ") +
+                           QString::fromStdString(error)));
 }
 
 } // namespace telemetry::ui
