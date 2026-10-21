@@ -10,7 +10,8 @@
 
 namespace telemetry {
 
-CaptureService::CaptureService(PacketQueue& output, std::counting_semaphore<1024>& outputReady)
+CaptureService::CaptureService(PacketQueue& output,
+                               std::counting_semaphore<1024>& outputReady)
     : output_(output), outputReady_(outputReady) {}
 
 CaptureService::~CaptureService() { stop(); }
@@ -25,7 +26,8 @@ std::vector<CaptureDevice> CaptureService::availableDevices(std::string& error) 
         return out;
     }
     for (auto* dev = devices; dev; dev = dev->next) {
-        out.push_back({dev->name ? dev->name : "", dev->description ? dev->description : ""});
+        out.push_back({dev->name ? dev->name : "",
+                       dev->description ? dev->description : ""});
     }
     pcap_freealldevs(devices);
 #else
@@ -34,7 +36,9 @@ std::vector<CaptureDevice> CaptureService::availableDevices(std::string& error) 
     return out;
 }
 
-bool CaptureService::start(std::string deviceName, std::string bpfFilter, std::string& error) {
+bool CaptureService::start(std::string deviceName,
+                           std::string bpfFilter,
+                           std::string& error) {
     if (running_.load(std::memory_order_acquire)) {
         error = "Capture already running";
         return false;
@@ -42,8 +46,10 @@ bool CaptureService::start(std::string deviceName, std::string bpfFilter, std::s
     if (thread_.joinable()) {
         thread_.join();
     }
+
     stopRequested_.store(false, std::memory_order_release);
     running_.store(true, std::memory_order_release);
+
 #if !defined(BSU_FTK_HAS_PCAP)
     (void)deviceName;
     (void)bpfFilter;
@@ -56,9 +62,12 @@ bool CaptureService::start(std::string deviceName, std::string bpfFilter, std::s
         std::scoped_lock lock(errorMutex_);
         lastError_.clear();
     }
-    thread_ = std::thread([this, device = std::move(deviceName), filter = std::move(bpfFilter)]() mutable {
-        run(std::move(device), std::move(filter));
-    });
+
+    thread_ = std::thread(
+        [this, device = std::move(deviceName),
+         filter = std::move(bpfFilter)]() mutable {
+            run(std::move(device), std::move(filter));
+        });
     return true;
 #endif
 }
@@ -92,21 +101,61 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         return;
     }
 
-    pcap_set_snaplen(handle, 2048);
-    pcap_set_promisc(handle, 1);
-    pcap_set_timeout(handle, 1);
-    pcap_set_buffer_size(handle, 4 * 1024 * 1024);
+    const auto failConfig = [this, handle](const char* setting) {
+        std::scoped_lock lock(errorMutex_);
+        const char* detail = pcap_geterr(handle);
+        lastError_ = std::string(setting) +
+            (detail && *detail ? ": " + std::string(detail) : " failed");
+    };
+
+    if (pcap_set_snaplen(handle, 2048) != 0) {
+        failConfig("pcap_set_snaplen");
+        pcap_close(handle);
+        running_.store(false);
+        return;
+    }
+
+    // The monitored line uses Ethernet broadcast. Promiscuous mode is not
+    // required and is intentionally disabled for the passive station.
+    if (pcap_set_promisc(handle, 0) != 0) {
+        failConfig("pcap_set_promisc");
+        pcap_close(handle);
+        running_.store(false);
+        return;
+    }
+
+    if (pcap_set_timeout(handle, 1) != 0) {
+        failConfig("pcap_set_timeout");
+        pcap_close(handle);
+        running_.store(false);
+        return;
+    }
+
+    if (pcap_set_buffer_size(handle, 4 * 1024 * 1024) != 0) {
+        failConfig("pcap_set_buffer_size");
+        pcap_close(handle);
+        running_.store(false);
+        return;
+    }
+
 #ifdef PCAP_TSTAMP_HOST_HIPREC_UNSYNCED
     (void)pcap_set_tstamp_type(handle, PCAP_TSTAMP_HOST_HIPREC_UNSYNCED);
 #endif
+
     int timestampPrecision = PCAP_TSTAMP_PRECISION_MICRO;
 #ifdef PCAP_TSTAMP_PRECISION_NANO
     if (pcap_set_tstamp_precision(handle, PCAP_TSTAMP_PRECISION_NANO) == 0) {
         timestampPrecision = PCAP_TSTAMP_PRECISION_NANO;
     }
 #endif
+
 #ifdef PCAP_ERROR_ACTIVATED
-    (void)pcap_set_immediate_mode(handle, 1);
+    if (pcap_set_immediate_mode(handle, 1) != 0) {
+        failConfig("pcap_set_immediate_mode");
+        pcap_close(handle);
+        running_.store(false);
+        return;
+    }
 #endif
 
     const int activateResult = pcap_activate(handle);
@@ -118,9 +167,22 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         return;
     }
 
+    if (pcap_datalink(handle) != DLT_EN10MB) {
+        {
+            std::scoped_lock lock(errorMutex_);
+            lastError_ =
+                "Selected Npcap interface does not provide Ethernet "
+                "(DLT_EN10MB) frames";
+        }
+        pcap_close(handle);
+        running_.store(false);
+        return;
+    }
+
     if (!bpfFilter.empty()) {
         bpf_program program{};
-        if (pcap_compile(handle, &program, bpfFilter.c_str(), 1, PCAP_NETMASK_UNKNOWN) < 0 ||
+        if (pcap_compile(handle, &program, bpfFilter.c_str(), 1,
+                         PCAP_NETMASK_UNKNOWN) < 0 ||
             pcap_setfilter(handle, &program) < 0) {
             std::scoped_lock lock(errorMutex_);
             lastError_ = pcap_geterr(handle);
@@ -146,9 +208,13 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         }
 
         RawPacket packet;
-        const auto fractional = static_cast<std::int64_t>(header->ts.tv_usec);
-        packet.captureTimestampNs = static_cast<std::int64_t>(header->ts.tv_sec) * 1'000'000'000LL +
-            (timestampPrecision == PCAP_TSTAMP_PRECISION_NANO ? fractional : fractional * 1000LL);
+        const auto fractional =
+            static_cast<std::int64_t>(header->ts.tv_usec);
+        packet.captureTimestampNs =
+            static_cast<std::int64_t>(header->ts.tv_sec) * 1'000'000'000LL +
+            (timestampPrecision == PCAP_TSTAMP_PRECISION_NANO
+                 ? fractional
+                 : fractional * 1000LL);
         packet.capturedLength = header->caplen;
         packet.wireLength = header->len;
         packet.bytes.assign(bytes, bytes + header->caplen);
@@ -172,6 +238,7 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
     (void)deviceName;
     (void)bpfFilter;
 #endif
+
     running_.store(false);
 }
 
