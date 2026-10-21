@@ -1,0 +1,9 @@
+/build/
+/build-*/
+/.vs/
+/.idea/
+*.user
+*.user.*
+CMakeUserPresets.json
+*.pcap
+*.pcapng
