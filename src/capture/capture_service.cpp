@@ -194,6 +194,15 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         pcap_freecode(&program);
     }
 
+    const auto updatePcapStats = [this, handle] {
+        pcap_stat stat{};
+        if (pcap_stats(handle, &stat) == 0) {
+            pcapReceived_ = stat.ps_recv;
+            pcapDropped_ = stat.ps_drop;
+            pcapIfDropped_ = stat.ps_ifdrop;
+        }
+    };
+
     while (!stopRequested_.load(std::memory_order_acquire)) {
         pcap_pkthdr* header = nullptr;
         const u_char* bytes = nullptr;
@@ -219,7 +228,11 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         packet.wireLength = header->len;
         packet.bytes.assign(bytes, bytes + header->caplen);
 
-        ++captured_;
+        const auto capturedNow = ++captured_;
+        if ((capturedNow & 0x3FU) == 0U) {
+            updatePcapStats();
+        }
+
         if (output_.tryPush(std::move(packet))) {
             outputReady_.release();
         } else {
@@ -227,12 +240,7 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         }
     }
 
-    pcap_stat stat{};
-    if (pcap_stats(handle, &stat) == 0) {
-        pcapReceived_ = stat.ps_recv;
-        pcapDropped_ = stat.ps_drop;
-        pcapIfDropped_ = stat.ps_ifdrop;
-    }
+    updatePcapStats();
     pcap_close(handle);
 #else
     (void)deviceName;
