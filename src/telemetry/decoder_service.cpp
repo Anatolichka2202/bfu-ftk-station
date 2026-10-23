@@ -67,8 +67,10 @@ void addLinkObservation(TelemetryBatch& batch,
 
 DecoderService::DecoderService(PacketQueue& input,
                                std::counting_semaphore<1024>& inputReady,
-                               BatchQueue& output)
-    : input_(input), inputReady_(inputReady), output_(output) {}
+                               BatchQueue& output,
+                               PacketJournalQueue& journal)
+    : input_(input), inputReady_(inputReady), output_(output),
+      journal_(journal) {}
 
 DecoderService::~DecoderService() { stop(); }
 
@@ -87,7 +89,7 @@ void DecoderService::stop() {
 
 DecoderStats DecoderService::stats() const noexcept {
     return {packetsSeen_.load(), packetsDecoded_.load(), packetsIgnored_.load(),
-            decodeErrors_.load(), batchDrops_.load()};
+            decodeErrors_.load(), batchDrops_.load(), journalDrops_.load()};
 }
 
 void DecoderService::run() {
@@ -99,6 +101,13 @@ void DecoderService::run() {
         if (!input_.tryPop(packet)) continue;
 
         ++packetsSeen_;
+
+        // Journal EVERYTHING first, including unknown sources, malformed
+        // frames, ARP, IPv6 and any frames addressed to other subscribers.
+        // The journal is independent of payload decoding.
+        if (!journal_.tryPush(packet)) {
+            ++journalDrops_;
+        }
 
         if (packet.bytes.size() < 14) {
             ++packetsIgnored_;
