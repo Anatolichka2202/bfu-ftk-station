@@ -115,9 +115,9 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
         return;
     }
 
-    // The monitored line uses Ethernet broadcast. Promiscuous mode is not
-    // required and is intentionally disabled for the passive station.
-    if (pcap_set_promisc(handle, 0) != 0) {
+    // The station is a passive sniffer. Traffic is not addressed to it, so
+    // the adapter must accept frames for other destination MAC addresses.
+    if (pcap_set_promisc(handle, 1) != 0) {
         failConfig("pcap_set_promisc");
         pcap_close(handle);
         running_.store(false);
