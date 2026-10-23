@@ -13,6 +13,7 @@ namespace telemetry {
 
 using PacketQueue = BoundedSpscQueue<RawPacket, 1024>;
 using BatchQueue = BoundedSpscQueue<TelemetryBatch, 256>;
+using PacketJournalQueue = BoundedSpscQueue<RawPacket, 4096>;
 
 struct DecoderStats {
     std::uint64_t packetsSeen{};
@@ -20,13 +21,15 @@ struct DecoderStats {
     std::uint64_t packetsIgnored{};
     std::uint64_t decodeErrors{};
     std::uint64_t batchDrops{};
+    std::uint64_t journalDrops{};
 };
 
 class DecoderService {
 public:
     DecoderService(PacketQueue& input,
                    std::counting_semaphore<1024>& inputReady,
-                   BatchQueue& output);
+                   BatchQueue& output,
+                   PacketJournalQueue& journal);
     ~DecoderService();
 
     void start();
@@ -39,6 +42,7 @@ private:
     PacketQueue& input_;
     std::counting_semaphore<1024>& inputReady_;
     BatchQueue& output_;
+    PacketJournalQueue& journal_;
     std::thread thread_;
     std::atomic<bool> stopRequested_{false};
 
@@ -47,6 +51,7 @@ private:
     std::atomic<std::uint64_t> packetsIgnored_{0};
     std::atomic<std::uint64_t> decodeErrors_{0};
     std::atomic<std::uint64_t> batchDrops_{0};
+    std::atomic<std::uint64_t> journalDrops_{0};
 };
 
 } // namespace telemetry
