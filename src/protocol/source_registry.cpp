@@ -59,8 +59,8 @@ std::optional<SourceDescriptor> classifySource(const MacAddress& mac,
 }
 
 std::string buildCaptureFilter() {
-    // Intentionally empty: the sniffer captures every Ethernet frame visible
-    // to the NIC. Protocol/source filtering happens in userspace after capture.
+    // Intentionally empty: capture every Ethernet frame visible to the NIC.
+    // Source/protocol selection happens after capture in userspace.
     return {};
 }
 
