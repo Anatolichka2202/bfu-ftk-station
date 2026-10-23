@@ -626,6 +626,34 @@ MainWindow::MainWindow(CaptureService& capture,
         }
 
         QTreeWidget,
+        QTableView,
+        QPlainTextEdit {
+            background: #111a22;
+            alternate-background-color: #15202a;
+            color: #dce6ef;
+            border: 1px solid #283744;
+            gridline-color: #263540;
+            selection-background-color: #244d6c;
+            selection-color: #ffffff;
+        }
+
+        QTabWidget::pane {
+            background: #17212b;
+            border: 1px solid #2a3946;
+        }
+
+        QTabBar::tab {
+            background: #1c2934;
+            padding: 8px 18px;
+            color: #a9bbc9;
+        }
+
+        QTabBar::tab:selected {
+            background: #244d6c;
+            color: #ffffff;
+        }
+
+        QTreeWidget,
         QTableView {
             background: #111a22;
             alternate-background-color: #15202a;
@@ -936,6 +964,11 @@ void MainWindow::updateStatus() {
                            ? QString{}
                            : QStringLiteral("  |  ") +
                                  QString::fromStdString(error)));
+    diagnostics_->setText(
+        diagnostics_->text() +
+        QStringLiteral("  journal_drop=%1  journal_visible=%2")
+            .arg(ds.journalDrops)
+            .arg(journal_.rowCount()));
 }
 
 bool MainWindow::simulationMode() const {
