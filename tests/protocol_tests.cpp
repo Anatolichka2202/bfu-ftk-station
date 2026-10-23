@@ -16,8 +16,7 @@ namespace {
 
 bool decodeFrame(const RawPacket& packet, TelemetryBatch& batch) {
     const auto udp = protocol::parseEthernetIpv4Udp(packet.bytes);
-    if (!udp || !protocol::isBroadcastMac(udp->destinationMac))
-        return false;
+    if (!udp) return false;
 
     const auto source = protocol::classifySource(
         udp->sourceMac, udp->sourceIpv4, udp->sourcePort);
@@ -62,6 +61,18 @@ int main() {
             assert(decodeFrame(packet, batch));
             assert(!batch.values.empty());
         }
+
+        // The station is not an addressee. Destination MAC must not affect
+        // decoding after the NIC has captured the frame.
+        auto foreignDestination = packets[0];
+        foreignDestination.bytes[0] = 0x00;
+        foreignDestination.bytes[1] = 0x11;
+        foreignDestination.bytes[2] = 0x22;
+        foreignDestination.bytes[3] = 0x33;
+        foreignDestination.bytes[4] = 0x44;
+        foreignDestination.bytes[5] = 0x55;
+        TelemetryBatch batch;
+        assert(decodeFrame(foreignDestination, batch));
     }
 
     {
