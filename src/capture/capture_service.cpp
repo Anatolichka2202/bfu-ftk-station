@@ -108,7 +108,7 @@ void CaptureService::run(std::string deviceName, std::string bpfFilter) {
             (detail && *detail ? ": " + std::string(detail) : " failed");
     };
 
-    if (pcap_set_snaplen(handle, 2048) != 0) {
+    if (pcap_set_snaplen(handle, 65535) != 0) {
         failConfig("pcap_set_snaplen");
         pcap_close(handle);
         running_.store(false);
