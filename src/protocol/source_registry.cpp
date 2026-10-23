@@ -1,8 +1,5 @@
 #include "protocol/source_registry.h"
 
-#include <cstdio>
-#include <sstream>
-
 namespace telemetry::protocol {
 namespace {
 
@@ -29,12 +26,6 @@ constexpr SourceDescriptor kSources[] = {
     {{0x02,0x59,0x4E,0x50,0x00,0x01}, SourceKind::Ynp, "YNP.ETH"},
 };
 
-std::string macText(const MacAddress& mac) {
-    char out[18]{};
-    std::snprintf(out, sizeof(out), "%02x:%02x:%02x:%02x:%02x:%02x",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    return out;
-}
 
 } // namespace
 
