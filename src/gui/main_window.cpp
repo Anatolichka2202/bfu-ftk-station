@@ -13,6 +13,7 @@
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStyle>
+#include <QStringList>
 #include <QTableView>
 #include <QTimer>
 #include <QTreeWidget>
@@ -588,8 +589,8 @@ void MainWindow::buildSourceTree() {
             QStringLiteral("MAC: %1").arg(macText(source.mac)));
     }
 
-    for (auto* item : stages) {
-        item->setExpanded(true);
+    for (auto it = stages.begin(); it != stages.end(); ++it) {
+        it.value()->setExpanded(true);
     }
 
     sources_->setCurrentItem(all);
@@ -763,15 +764,15 @@ void MainWindow::updateStatus() {
     diagnostics_->setText(
         simulated
             ? QStringLiteral(
-                  "mode=simulation  queue_drop=%1  parse_error=%2  "
-                  "unknown=%3  batch_drop=%4")
+                  "mode=simulation  queue_drop=%1  decode_error=%2  "
+                  "ignored=%3  batch_drop=%4")
                   .arg(ss.queueDrops)
                   .arg(ds.decodeErrors)
                   .arg(ds.packetsIgnored)
                   .arg(ds.batchDrops)
             : QStringLiteral(
                   "mode=npcap  capture_queue_drop=%1  pcap_drop=%2  "
-                  "if_drop=%3  parse_error=%4  unknown=%5  batch_drop=%6%7")
+                  "if_drop=%3  decode_error=%4  ignored=%5  batch_drop=%6%7")
                   .arg(cs.queueDrops)
                   .arg(cs.pcapDropped)
                   .arg(cs.pcapInterfaceDropped)
