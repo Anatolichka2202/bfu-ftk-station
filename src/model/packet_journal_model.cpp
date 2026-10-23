@@ -16,7 +16,7 @@ QString macText(const std::uint8_t* mac) {
     QStringList parts;
     for (int i = 0; i < 6; ++i) {
         parts << QStringLiteral("%1")
-                     .arg(mac[i], 2, 16, QLatin1Char('0')).toUpper();
+                     .arg(static_cast<qulonglong>(mac[i]), 2, 16, QLatin1Char('0')).toUpper();
     }
     return parts.join(QLatin1Char(':'));
 }
@@ -248,7 +248,7 @@ QString PacketJournalModel::packetDetails(int row) const {
             if (i < end) {
                 const auto b = bytes[i];
                 hex += QStringLiteral("%1 ")
-                    .arg(b, 2, 16, QLatin1Char('0')).toUpper();
+                    .arg(static_cast<qulonglong>(b), 2, 16, QLatin1Char('0')).toUpper();
                 ascii += (b >= 32 && b < 127)
                     ? QChar(static_cast<char>(b))
                     : QLatin1Char('.');
