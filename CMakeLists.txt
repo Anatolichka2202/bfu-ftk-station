@@ -98,4 +98,11 @@ if(BUILD_TESTING)
     )
     target_include_directories(protocol_tests PRIVATE src)
     add_test(NAME protocol_tests COMMAND protocol_tests)
+    add_executable(packet_journal_tests
+        tests/packet_journal_tests.cpp
+        src/telemetry/decoder_service.cpp
+    )
+    target_include_directories(packet_journal_tests PRIVATE src)
+    target_link_libraries(packet_journal_tests PRIVATE telemetry_core)
+    add_test(NAME packet_journal_tests COMMAND packet_journal_tests)
 endif()
