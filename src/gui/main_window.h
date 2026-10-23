@@ -2,6 +2,7 @@
 
 #include "capture/capture_service.h"
 #include "model/telemetry_table_model.h"
+#include "model/packet_journal_model.h"
 #include "simulation/simulation_service.h"
 #include "telemetry/decoder_service.h"
 
@@ -14,6 +15,7 @@ class QLineEdit;
 class QPushButton;
 class QSortFilterProxyModel;
 class QTableView;
+class QPlainTextEdit;
 class QTimer;
 class QTreeWidget;
 
@@ -26,6 +28,7 @@ public:
                simulation::SimulationService& simulation,
                DecoderService& decoder,
                TelemetryTableModel& model,
+               PacketJournalModel& journal,
                QWidget* parent = nullptr);
 
 private slots:
@@ -45,6 +48,7 @@ private:
     simulation::SimulationService& simulation_;
     DecoderService& decoder_;
     TelemetryTableModel& model_;
+    PacketJournalModel& journal_;
 
     QComboBox* inputMode_{};
     QComboBox* devices_{};
@@ -62,6 +66,10 @@ private:
     QTreeWidget* sources_{};
     QSortFilterProxyModel* proxy_{};
     QTableView* table_{};
+    QSortFilterProxyModel* packetProxy_{};
+    QTableView* packetsTable_{};
+    QLineEdit* packetFilter_{};
+    QPlainTextEdit* packetDetails_{};
     QTimer* drainTimer_{};
     QTimer* statusTimer_{};
 
