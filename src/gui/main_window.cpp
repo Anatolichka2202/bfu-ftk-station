@@ -716,7 +716,7 @@ void MainWindow::updateStatus() {
     }
 
     const auto totalDrops = inputDrops + ds.batchDrops;
-    const auto totalErrors = ds.parseErrors + ds.unknownSources;
+    const auto totalErrors = ds.decodeErrors;
 
     rxValue_->setText(QString::number(received));
     dropValue_->setText(QString::number(totalDrops));
@@ -759,8 +759,8 @@ void MainWindow::updateStatus() {
                   "mode=simulation  queue_drop=%1  parse_error=%2  "
                   "unknown=%3  batch_drop=%4")
                   .arg(ss.queueDrops)
-                  .arg(ds.parseErrors)
-                  .arg(ds.unknownSources)
+                  .arg(ds.decodeErrors)
+                  .arg(ds.packetsIgnored)
                   .arg(ds.batchDrops)
             : QStringLiteral(
                   "mode=npcap  capture_queue_drop=%1  pcap_drop=%2  "
@@ -768,8 +768,8 @@ void MainWindow::updateStatus() {
                   .arg(cs.queueDrops)
                   .arg(cs.pcapDropped)
                   .arg(cs.pcapInterfaceDropped)
-                  .arg(ds.parseErrors)
-                  .arg(ds.unknownSources)
+                  .arg(ds.decodeErrors)
+                  .arg(ds.packetsIgnored)
                   .arg(ds.batchDrops)
                   .arg(error.empty()
                            ? QString{}
