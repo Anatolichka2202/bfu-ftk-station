@@ -6,6 +6,7 @@
 #include <QComboBox>
 #include <QFrame>
 #include <QHeaderView>
+#include <QHash>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -518,60 +519,62 @@ MainWindow::MainWindow(CaptureService& capture,
 void MainWindow::buildSourceTree() {
     sources_->clear();
 
-    auto* all =
-        new QTreeWidgetItem(
-            sources_, {QStringLiteral("Все источники")});
+    auto* all = new QTreeWidgetItem(
+        sources_, {QStringLiteral("Все абоненты")});
     all->setData(0, Qt::UserRole, QStringLiteral("all"));
 
-    auto* bcvm =
-        new QTreeWidgetItem(
-            sources_, {QStringLiteral("БЦВМ")});
-    bcvm->setData(
-        0, Qt::UserRole, QStringLiteral("prefix:BCVM."));
+    QHash<QString, QTreeWidgetItem*> stages;
 
-    auto* kasupp =
-        new QTreeWidgetItem(
-            sources_, {QStringLiteral("КАСУ ПП")});
-    kasupp->setData(
-        0, Qt::UserRole, QStringLiteral("prefix:KASUPP."));
+    const auto stageToken = [](std::string_view stage) {
+        if (stage == "СТУПЕНЬ Б") return QStringLiteral("prefix:B.");
+        if (stage == "СТУПЕНЬ А") return QStringLiteral("prefix:A.");
+        if (stage == "НАЗЕМКА") return QStringLiteral("prefix:GROUND.");
+        if (stage == "РЕЗЕРВ") return QStringLiteral("prefix:RESERVE.");
+        return QStringLiteral("all");
+    };
 
-    auto* yls =
-        new QTreeWidgetItem(
-            sources_, {QStringLiteral("ЯЛС / ЯАЗ")});
-    yls->setData(
-        0, Qt::UserRole, QStringLiteral("contains:.YLS."));
+    const auto ipv4Text = [](std::uint32_t value) {
+        return QStringLiteral("%1.%2.%3.%4")
+            .arg((value >> 24) & 0xFFU)
+            .arg((value >> 16) & 0xFFU)
+            .arg((value >> 8) & 0xFFU)
+            .arg(value & 0xFFU);
+    };
 
-    auto* ynp =
-        new QTreeWidgetItem(
-            sources_, {QStringLiteral("ЯНП")});
-    ynp->setData(
-        0, Qt::UserRole, QStringLiteral("prefix:YNP."));
+    const auto macText = [](const protocol::MacAddress& mac) {
+        QStringList parts;
+        for (const auto byte : mac) {
+            parts << QStringLiteral("%1")
+                         .arg(byte, 2, 16, QLatin1Char('0'))
+                         .toUpper();
+        }
+        return parts.join(QLatin1Char(':'));
+    };
 
     for (const auto& source : protocol::knownSources()) {
-        QTreeWidgetItem* parent = nullptr;
+        const auto stageName = QString::fromUtf8(
+            source.stage.data(), static_cast<int>(source.stage.size()));
 
-        switch (source.kind) {
-        case SourceKind::Bcvm:
-            parent = bcvm;
-            break;
-        case SourceKind::Kasupp:
-            parent = kasupp;
-            break;
-        case SourceKind::Yls:
-            parent = yls;
-            break;
-        case SourceKind::Ynp:
-            parent = ynp;
-            break;
-        default:
-            break;
+        auto* stageItem = stages.value(stageName, nullptr);
+        if (!stageItem) {
+            stageItem = new QTreeWidgetItem(sources_, {stageName});
+            stageItem->setData(0, Qt::UserRole, stageToken(source.stage));
+            stages.insert(stageName, stageItem);
         }
 
-        if (!parent) continue;
+        const auto block = QString::fromUtf8(
+            source.block.data(), static_cast<int>(source.block.size()));
+        const auto cell = QString::fromUtf8(
+            source.cell.data(), static_cast<int>(source.cell.size()));
 
-        auto* item = new QTreeWidgetItem(
-            parent, {displaySourceName(source.name)});
+        QString label = block + QStringLiteral(" / ") + cell;
+        if (!source.reserved && source.ipv4 != 0U) {
+            label += QStringLiteral(" — %1:%2")
+                         .arg(ipv4Text(source.ipv4))
+                         .arg(source.port);
+        }
 
+        auto* item = new QTreeWidgetItem(stageItem, {label});
         item->setData(
             0,
             Qt::UserRole,
@@ -579,12 +582,16 @@ void MainWindow::buildSourceTree() {
                 QString::fromUtf8(
                     source.name.data(),
                     static_cast<int>(source.name.size())));
+
+        item->setToolTip(
+            0,
+            QStringLiteral("MAC: %1").arg(macText(source.mac)));
     }
 
-    bcvm->setExpanded(true);
-    kasupp->setExpanded(true);
-    yls->setExpanded(false);
-    ynp->setExpanded(true);
+    for (auto* item : stages) {
+        item->setExpanded(true);
+    }
+
     sources_->setCurrentItem(all);
 }
 
