@@ -9,6 +9,10 @@
 #include <QHash>
 #include <QLabel>
 #include <QLineEdit>
+#include <QItemSelectionModel>
+#include <QPlainTextEdit>
+#include <QTabWidget>
+#include <QFontDatabase>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
@@ -116,13 +120,15 @@ MainWindow::MainWindow(CaptureService& capture,
                        simulation::SimulationService& simulation,
                        DecoderService& decoder,
                        TelemetryTableModel& model,
+                       PacketJournalModel& journal,
                        QWidget* parent)
     : QMainWindow(parent),
       capture_(capture),
       simulation_(simulation),
       decoder_(decoder),
-      model_(model) {
-    setWindowTitle(QStringLiteral("БСУ ФТК — станция телеметрии"));
+      model_(model),
+      journal_(journal) {
+    setWindowTitle(QStringLiteral("БСУ ФТК (имитатор) — Ethernet-сниффер"));
     resize(1440, 900);
     setMinimumSize(1100, 700);
 
@@ -142,12 +148,12 @@ MainWindow::MainWindow(CaptureService& capture,
     auto* titleBlock = new QVBoxLayout;
     titleBlock->setSpacing(0);
 
-    auto* title = new QLabel(QStringLiteral("БСУ ФТК"), titleBar);
+    auto* title = new QLabel(QStringLiteral("БСУ ФТК (имитатор)"), titleBar);
     title->setObjectName(QStringLiteral("screenTitle"));
 
     auto* subtitle = new QLabel(
         QStringLiteral(
-            "Станция телеметрии · пассивный Ethernet-монитор"),
+            "Имитатор · пассивное наблюдение Ethernet-обмена"),
         titleBar);
     subtitle->setObjectName(QStringLiteral("screenSubtitle"));
 
@@ -350,6 +356,8 @@ MainWindow::MainWindow(CaptureService& capture,
     drainTimer_->setInterval(33);
     connect(drainTimer_, &QTimer::timeout,
             &model_, &TelemetryTableModel::drain);
+    connect(drainTimer_, &QTimer::timeout,
+            &journal_, &PacketJournalModel::drain);
     drainTimer_->start();
 
     statusTimer_ = new QTimer(this);
@@ -553,6 +561,7 @@ void MainWindow::buildSourceTree() {
     };
 
     for (const auto& source : protocol::knownSources()) {
+        if (source.block == "БСУ:ФТК") continue; // Наши адреса, не внешний абонент.
         const auto stageName = QString::fromUtf8(
             source.stage.data(), static_cast<int>(source.stage.size()));
 
@@ -723,7 +732,7 @@ void MainWindow::updateStatus() {
         }
     }
 
-    const auto totalDrops = inputDrops + ds.batchDrops;
+    const auto totalDrops = inputDrops + ds.batchDrops + ds.journalDrops;
     const auto totalErrors = ds.decodeErrors;
 
     rxValue_->setText(QString::number(received));
