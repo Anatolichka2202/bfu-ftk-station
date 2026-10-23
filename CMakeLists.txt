@@ -71,6 +71,8 @@ add_executable(bsu_ftk_telemetry
     src/main.cpp
     src/model/telemetry_table_model.h
     src/model/telemetry_table_model.cpp
+    src/model/packet_journal_model.h
+    src/model/packet_journal_model.cpp
     src/gui/main_window.h
     src/gui/main_window.cpp
 )
