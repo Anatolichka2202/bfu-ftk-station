@@ -52,6 +52,28 @@ std::uint64_t valueOf(const TelemetryBatch& batch,
 
 int main() {
     {
+        const auto sources = protocol::knownSources();
+        assert(sources.size() == 32);
+
+        const protocol::MacAddress ynp1{0x42,0xD4,0x9D,0xB8,0xB7,0x5E};
+        const auto ynp = protocol::classifySource(ynp1);
+        assert(ynp);
+        assert(ynp->kind == SourceKind::Ynp);
+        assert(ynp->ipv4 == 0xC0A811E6U);
+        assert(ynp->port == 100);
+
+        const protocol::MacAddress sepB1{0x42,0x7F,0x1C,0xA9,0x1C,0x45};
+        const auto raw = protocol::classifySource(sepB1);
+        assert(raw);
+        assert(raw->kind == SourceKind::Raw);
+
+        const protocol::MacAddress reserve{0x42,0x23,0x76,0xE1,0x05,0x56};
+        const auto reserved = protocol::classifySource(reserve);
+        assert(reserved);
+        assert(reserved->reserved);
+    }
+
+    {
         auto packets = simulation::makeSimulationTick(0, 123456789);
         assert(packets.size() == 4);
 
