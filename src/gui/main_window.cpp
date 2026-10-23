@@ -87,6 +87,57 @@ private:
     QString searchText_;
 };
 
+// This filter changes only what is displayed, never which frames Npcap
+// captures or which packets are retained in the journal input queue.
+class PacketFilterProxy final : public QSortFilterProxyModel {
+public:
+    explicit PacketFilterProxy(QObject* parent = nullptr)
+        : QSortFilterProxyModel(parent) {}
+
+    void setSourceToken(QString token) {
+        sourceToken_ = std::move(token);
+        invalidateFilter();
+    }
+
+    void setSearchText(QString value) {
+        search_ = std::move(value).trimmed();
+        invalidateFilter();
+    }
+
+protected:
+    bool filterAcceptsRow(int row, const QModelIndex& parent) const override {
+        const auto first = sourceModel()->index(row, 0, parent);
+        const auto src = first.data(PacketJournalModel::SourceKeyRole).toString();
+        const auto dst = first.data(PacketJournalModel::DestinationKeyRole).toString();
+
+        bool accepted = sourceToken_ == QStringLiteral("all");
+        if (sourceToken_.startsWith(QStringLiteral("prefix:"))) {
+            const auto pattern = sourceToken_.mid(7);
+            accepted = src.startsWith(pattern, Qt::CaseInsensitive) ||
+                       dst.startsWith(pattern, Qt::CaseInsensitive);
+        } else if (sourceToken_.startsWith(QStringLiteral("exact:"))) {
+            const auto pattern = sourceToken_.mid(6);
+            accepted = src.compare(pattern, Qt::CaseInsensitive) == 0 ||
+                       dst.compare(pattern, Qt::CaseInsensitive) == 0;
+        }
+        if (!accepted) return false;
+        if (search_.isEmpty()) return true;
+
+        for (int column = 0; column < PacketJournalModel::ColumnCount; ++column) {
+            if (sourceModel()->index(row, column, parent)
+                    .data(Qt::DisplayRole).toString()
+                    .contains(search_, Qt::CaseInsensitive)) return true;
+        }
+        // Full MAC addresses remain searchable even when resolved to a name.
+        const auto tip = first.data(Qt::ToolTipRole).toString();
+        return tip.contains(search_, Qt::CaseInsensitive);
+    }
+
+private:
+    QString sourceToken_{QStringLiteral("all")};
+    QString search_;
+};
+
 QFrame* makeMetricCard(QWidget* parent,
                        const QString& title,
                        QLabel*& value) {
