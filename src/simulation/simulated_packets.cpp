@@ -20,7 +20,7 @@ using Mac = std::array<std::uint8_t, 6>;
 constexpr Mac kBroadcast{0xff,0xff,0xff,0xff,0xff,0xff};
 constexpr Mac kBcvmMac{0x42,0x56,0x15,0xcb,0xbe,0xbd};
 constexpr Mac kKasuppMac{0x42,0x71,0x63,0x96,0xec,0x8f};
-constexpr Mac kYlsMac{0x42,0x84,0x79,0x7c,0xa8,0x4e};
+constexpr Mac kYlsMac{0x42,0x93,0x6a,0xb2,0x28,0xc0};
 constexpr Mac kYnpMac{0x42,0xD4,0x9D,0xB8,0xB7,0x5E};
 
 constexpr std::uint32_t ip(std::uint8_t a, std::uint8_t b,
@@ -280,8 +280,8 @@ std::vector<RawPacket> makeSimulationTick(
                           ip(192,168,17,231),206,101,kasu,ts));
 
     const auto yls=ylsPayload(counter);
-    out.push_back(wrapUdp(kYlsMac,ip(192,168,17,234),
-                          ip(192,168,17,246),104,206,yls,ts));
+    out.push_back(wrapUdp(kYlsMac,ip(192,168,17,232),
+                          ip(192,168,17,246),102,206,yls,ts));
 
     const auto ynp=ynpPayload(counter);
     out.push_back(wrapUdp(kYnpMac,ip(192,168,17,230),
