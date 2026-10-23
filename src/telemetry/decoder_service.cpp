@@ -6,7 +6,64 @@
 #include "protocol/yls_yaz_decoder.h"
 #include "protocol/ynp_decoder.h"
 
+#include <algorithm>
+#include <string>
+
 namespace telemetry {
+namespace {
+
+protocol::MacAddress sourceMacOf(const RawPacket& packet) noexcept {
+    protocol::MacAddress mac{};
+    if (packet.bytes.size() >= 12) {
+        std::copy_n(packet.bytes.data() + 6, 6, mac.begin());
+    }
+    return mac;
+}
+
+void addLinkValue(TelemetryBatch& batch,
+                  const protocol::SourceDescriptor& source,
+                  std::string parameter,
+                  std::uint64_t value,
+                  std::int64_t ts) {
+    batch.values.push_back({
+        source.kind,
+        std::string(source.name),
+        "LINK",
+        std::move(parameter),
+        value,
+        ts});
+}
+
+void addLinkObservation(TelemetryBatch& batch,
+                        const protocol::SourceDescriptor& source,
+                        const RawPacket& packet,
+                        const protocol::UdpDatagramView* udp) {
+    batch.captureTimestampNs = packet.captureTimestampNs;
+
+    addLinkValue(batch, source, "captured_length",
+                 packet.capturedLength, packet.captureTimestampNs);
+    addLinkValue(batch, source, "wire_length",
+                 packet.wireLength, packet.captureTimestampNs);
+    addLinkValue(batch, source, "configured_ipv4",
+                 source.ipv4, packet.captureTimestampNs);
+    addLinkValue(batch, source, "configured_port",
+                 source.port, packet.captureTimestampNs);
+
+    if (!udp) return;
+
+    addLinkValue(batch, source, "source_ipv4",
+                 udp->sourceIpv4, packet.captureTimestampNs);
+    addLinkValue(batch, source, "destination_ipv4",
+                 udp->destinationIpv4, packet.captureTimestampNs);
+    addLinkValue(batch, source, "source_port",
+                 udp->sourcePort, packet.captureTimestampNs);
+    addLinkValue(batch, source, "destination_port",
+                 udp->destinationPort, packet.captureTimestampNs);
+    addLinkValue(batch, source, "udp_payload_bytes",
+                 udp->payload.size(), packet.captureTimestampNs);
+}
+
+} // namespace
 
 DecoderService::DecoderService(PacketQueue& input,
                                std::counting_semaphore<1024>& inputReady,
@@ -39,53 +96,76 @@ void DecoderService::run() {
         if (stopRequested_.load(std::memory_order_acquire)) break;
 
         RawPacket packet;
-        if (!input_.tryPop(packet)) {
-            continue;
-        }
+        if (!input_.tryPop(packet)) continue;
 
         ++packetsSeen_;
-        const auto udp = protocol::parseEthernetIpv4Udp(packet.bytes);
-        if (!udp) {
+
+        if (packet.bytes.size() < 14) {
             ++packetsIgnored_;
             continue;
         }
 
-        const auto source = protocol::classifySource(
-            udp->sourceMac, udp->sourceIpv4, udp->sourcePort);
+        const auto source = protocol::classifySource(sourceMacOf(packet));
         if (!source) {
             ++packetsIgnored_;
             continue;
         }
 
+        const auto udp = protocol::parseEthernetIpv4Udp(packet.bytes);
+
         TelemetryBatch batch;
-        bool decoded = false;
-        switch (source->kind) {
-        case SourceKind::Bcvm:
-            decoded = protocol::decodeBcvmToKasupp(udp->payload, packet.captureTimestampNs,
-                                                   source->name, batch);
-            break;
-        case SourceKind::Kasupp:
-            decoded = protocol::decodeKasuppToBcvm(udp->payload, packet.captureTimestampNs,
-                                                   source->name, batch);
-            break;
-        case SourceKind::Yls:
-            decoded = protocol::decodeYlsYaz(udp->payload, packet.captureTimestampNs,
-                                             source->name, batch);
-            break;
-        case SourceKind::Ynp:
-            decoded = protocol::decodeYnpToBcvm(udp->payload, packet.captureTimestampNs,
-                                                source->name, batch);
-            break;
-        default:
-            ++packetsIgnored_;
+        addLinkObservation(batch, *source, packet,
+                           udp ? &*udp : nullptr);
+
+        // A known source without a payload decoder is still visible in the
+        // station as RAW/LINK traffic.
+        if (source->kind == SourceKind::Raw) {
+            if (!output_.tryPush(std::move(batch))) {
+                ++batchDrops_;
+            }
             continue;
         }
 
-        if (!decoded) {
-            ++decodeErrors_;
+        if (!udp) {
+            ++packetsIgnored_;
+            if (!output_.tryPush(std::move(batch))) {
+                ++batchDrops_;
+            }
             continue;
         }
-        ++packetsDecoded_;
+
+        bool decoded = false;
+        switch (source->kind) {
+        case SourceKind::Bcvm:
+            decoded = protocol::decodeBcvmToKasupp(
+                udp->payload, packet.captureTimestampNs, source->name, batch);
+            break;
+        case SourceKind::Kasupp:
+            decoded = protocol::decodeKasuppToBcvm(
+                udp->payload, packet.captureTimestampNs, source->name, batch);
+            break;
+        case SourceKind::Yls:
+            decoded = protocol::decodeYlsYaz(
+                udp->payload, packet.captureTimestampNs, source->name, batch);
+            break;
+        case SourceKind::Ynp:
+            decoded = protocol::decodeYnpToBcvm(
+                udp->payload, packet.captureTimestampNs, source->name, batch);
+            break;
+        case SourceKind::Raw:
+        case SourceKind::Unknown:
+            break;
+        }
+
+        if (decoded) {
+            ++packetsDecoded_;
+        } else {
+            ++decodeErrors_;
+        }
+
+        // Even when the payload format is not yet implemented or is invalid,
+        // the station still reports that this known Ethernet subscriber was
+        // physically heard.
         if (!output_.tryPush(std::move(batch))) {
             ++batchDrops_;
         }
