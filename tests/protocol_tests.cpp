@@ -18,8 +18,7 @@ bool decodeFrame(const RawPacket& packet, TelemetryBatch& batch) {
     const auto udp = protocol::parseEthernetIpv4Udp(packet.bytes);
     if (!udp) return false;
 
-    const auto source = protocol::classifySource(
-        udp->sourceMac, udp->sourceIpv4, udp->sourcePort);
+    const auto source = protocol::classifySource(udp->sourceMac);
     if (!source) return false;
 
     switch (source->kind) {
