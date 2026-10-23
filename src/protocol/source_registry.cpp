@@ -59,16 +59,9 @@ std::optional<SourceDescriptor> classifySource(const MacAddress& mac,
 }
 
 std::string buildCaptureFilter() {
-    std::ostringstream filter;
-    filter << "ether broadcast and udp and ("
-           << "(src host 192.168.17.240 and src port 200)";
-
-    for (const auto& source : kSources) {
-        filter << " or ether src " << macText(source.mac);
-    }
-
-    filter << ')';
-    return filter.str();
+    // Intentionally empty: the sniffer captures every Ethernet frame visible
+    // to the NIC. Protocol/source filtering happens in userspace after capture.
+    return {};
 }
 
 } // namespace telemetry::protocol
