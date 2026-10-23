@@ -332,7 +332,10 @@ MainWindow::MainWindow(CaptureService& capture,
     tableHeader->addStretch();
     tableHeader->addWidget(filter_);
 
-    telemetryLayout->addLayout(tableHeader);
+    auto* decodedTab = new QWidget(telemetryPanel);
+    auto* decodedLayout = new QVBoxLayout(decodedTab);
+    decodedLayout->setContentsMargins(6, 6, 6, 6);
+    decodedLayout->addLayout(tableHeader);
 
     proxy_ = new TelemetryFilterProxy(this);
     proxy_->setSourceModel(&model_);
@@ -366,7 +369,95 @@ MainWindow::MainWindow(CaptureService& capture,
     table_->sortByColumn(
         TelemetryTableModel::Source, Qt::AscendingOrder);
 
-    telemetryLayout->addWidget(table_);
+    decodedLayout->addWidget(table_);
+
+    // All captured frames are displayed independently of known payload
+    // decoders. Unknown MAC/protocol packets remain in this journal.
+    auto* packetsTab = new QWidget(telemetryPanel);
+    auto* packetsLayout = new QVBoxLayout(packetsTab);
+    packetsLayout->setContentsMargins(6, 6, 6, 6);
+
+    auto* packetsHeader = new QHBoxLayout;
+    auto* packetsTitle = new QLabel(
+        QStringLiteral("ETHERNET — ВСЕ ЗАХВАЧЕННЫЕ КАДРЫ"), packetsTab);
+    packetsTitle->setObjectName(QStringLiteral("sectionTitle"));
+
+    packetFilter_ = new QLineEdit(packetsTab);
+    packetFilter_->setClearButtonEnabled(true);
+    packetFilter_->setPlaceholderText(
+        QStringLiteral("MAC, IP, порт, абонент, протокол"));
+    packetFilter_->setMaximumWidth(430);
+    packetsHeader->addWidget(packetsTitle);
+    packetsHeader->addStretch();
+    packetsHeader->addWidget(packetFilter_);
+    packetsLayout->addLayout(packetsHeader);
+
+    packetProxy_ = new PacketFilterProxy(this);
+    packetProxy_->setSourceModel(&journal_);
+    packetProxy_->setDynamicSortFilter(true);
+
+    packetsTable_ = new QTableView(packetsTab);
+    packetsTable_->setModel(packetProxy_);
+    packetsTable_->setAlternatingRowColors(true);
+    packetsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    packetsTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    packetsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    packetsTable_->verticalHeader()->setVisible(false);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::Timestamp, QHeaderView::ResizeToContents);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::Source, QHeaderView::Stretch);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::Destination, QHeaderView::Stretch);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::Protocol, QHeaderView::ResizeToContents);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::SourceEndpoint, QHeaderView::ResizeToContents);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::DestinationEndpoint, QHeaderView::ResizeToContents);
+    packetsTable_->horizontalHeader()->setSectionResizeMode(
+        PacketJournalModel::Length, QHeaderView::ResizeToContents);
+
+    packetDetails_ = new QPlainTextEdit(packetsTab);
+    packetDetails_->setReadOnly(true);
+    packetDetails_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    packetDetails_->setPlaceholderText(
+        QStringLiteral("Выберите кадр для просмотра Ethernet-заголовка и HEX"));
+
+    auto* packetSplitter = new QSplitter(Qt::Vertical, packetsTab);
+    packetSplitter->setChildrenCollapsible(false);
+    packetSplitter->addWidget(packetsTable_);
+    packetSplitter->addWidget(packetDetails_);
+    packetSplitter->setStretchFactor(0, 3);
+    packetSplitter->setStretchFactor(1, 2);
+    packetsLayout->addWidget(packetSplitter, 1);
+
+    auto* tabs = new QTabWidget(telemetryPanel);
+    tabs->addTab(packetsTab, QStringLiteral("Весь трафик"));
+    tabs->addTab(decodedTab, QStringLiteral("Телеметрия"));
+    telemetryLayout->addWidget(tabs, 1);
+
+    connect(packetFilter_, &QLineEdit::textChanged,
+            this, [this](const QString& value) {
+                static_cast<PacketFilterProxy*>(packetProxy_)
+                    ->setSearchText(value);
+            });
+
+    connect(packetsTable_->selectionModel(),
+            &QItemSelectionModel::currentRowChanged,
+            this, [this](const QModelIndex& index) {
+                const auto row = packetProxy_->mapToSource(index).row();
+                packetDetails_->setPlainText(journal_.packetDetails(
+                    index.isValid() ? row : -1));
+            });
+
+    connect(&journal_, &QAbstractItemModel::modelReset, this,
+            [this] { packetDetails_->clear(); });
+    connect(&journal_, &QAbstractItemModel::rowsInserted, this,
+            [this] {
+                if (!packetsTable_->selectionModel()->hasSelection())
+                    packetsTable_->scrollToBottom();
+            });
 
     splitter->addWidget(sourcePanel);
     splitter->addWidget(telemetryPanel);
@@ -749,6 +840,8 @@ void MainWindow::applySourceFilter() {
             : QStringLiteral("all");
 
     static_cast<TelemetryFilterProxy*>(proxy_)
+        ->setSourceToken(token);
+    static_cast<PacketFilterProxy*>(packetProxy_)
         ->setSourceToken(token);
 }
 
