@@ -17,16 +17,16 @@ struct SourceDescriptor {
     MacAddress mac;
     SourceKind kind;
     std::string_view name;
+    std::string_view stage;
+    std::string_view block;
+    std::string_view cell;
+    std::uint32_t ipv4{};
+    std::uint16_t port{};
+    bool reserved{};
 };
-
-inline constexpr std::uint32_t kYnpIpv4 = 0xC0A811F0U; // 192.168.17.240
-inline constexpr std::uint16_t kYnpSourcePort = 200U;
 
 std::span<const SourceDescriptor> knownSources() noexcept;
 std::optional<SourceDescriptor> classifySource(const MacAddress& mac) noexcept;
-std::optional<SourceDescriptor> classifySource(const MacAddress& mac,
-                                               std::uint32_t sourceIpv4,
-                                               std::uint16_t sourcePort) noexcept;
 std::string buildCaptureFilter();
 
 } // namespace telemetry::protocol
