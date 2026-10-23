@@ -29,8 +29,8 @@ void DecoderService::stop() {
 }
 
 DecoderStats DecoderService::stats() const noexcept {
-    return {packetsSeen_.load(), packetsDecoded_.load(), parseErrors_.load(),
-            unknownSources_.load(), batchDrops_.load()};
+    return {packetsSeen_.load(), packetsDecoded_.load(), packetsIgnored_.load(),
+            decodeErrors_.load(), batchDrops_.load()};
 }
 
 void DecoderService::run() {
@@ -45,15 +45,15 @@ void DecoderService::run() {
 
         ++packetsSeen_;
         const auto udp = protocol::parseEthernetIpv4Udp(packet.bytes);
-        if (!udp || !protocol::isBroadcastMac(udp->destinationMac)) {
-            ++parseErrors_;
+        if (!udp) {
+            ++packetsIgnored_;
             continue;
         }
 
         const auto source = protocol::classifySource(
             udp->sourceMac, udp->sourceIpv4, udp->sourcePort);
         if (!source) {
-            ++unknownSources_;
+            ++packetsIgnored_;
             continue;
         }
 
@@ -77,11 +77,12 @@ void DecoderService::run() {
                                                 source->name, batch);
             break;
         default:
-            break;
+            ++packetsIgnored_;
+            continue;
         }
 
         if (!decoded) {
-            ++parseErrors_;
+            ++decodeErrors_;
             continue;
         }
         ++packetsDecoded_;
